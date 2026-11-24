@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Philosophy Clicker</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Courier New", Courier, monospace; background: #fff; color: #111; }
+  button { font-family: inherit; font-size: 13px; background: #fff; color: #111; border: 1px solid #111; padding: 6px 10px; cursor: pointer; }
+  button:hover:not(:disabled) { background: #111; color: #fff; }
+  button:disabled { border-color: #c8c8c8; color: #b0b0b0; cursor: default; }
+
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #fff; z-index: 10; }
+  #start h1 { font-weight: normal; letter-spacing: 3px; margin: 0 0 4px; }
+  #start p { margin: 0 0 12px; color: #666; font-size: 13px; }
+  #start button { width: 280px; padding: 10px; }
+  #start small { color: #888; font-size: 11px; }
+
+  #top { display: flex; justify-content: center; align-items: baseline; gap: 36px; padding: 14px; border-bottom: 1px solid #111; }
+  #money { font-size: 18px; }
+  #rps, #mode { font-size: 14px; }
+  #mode { color: #999; }
+  #population { font-size: 14px; }
+
+  #main { display: flex; min-height: calc(100vh - 52px); }
+  .side { width: 230px; flex-shrink: 0; padding: 18px 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  #left { border-right: 1px dashed #ccc; }
+  #right { border-left: 1px dashed #ccc; }
+  .lab { text-align: center; white-space: pre-line; font-size: 13px; line-height: 1.4; margin-top: 8px; }
+  .side button { width: 200px; }
+  .hidden { display: none !important; }
+
+  #grid { flex: 1; display: grid; gap: 4px; padding: 10px; align-content: center; justify-content: center; }
+  .proc { border: 1px solid #111; padding: 8px 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; overflow: hidden; min-height: 60px; }
+  .q { margin: 2px 4px 8px; line-height: 1.3; }
+  .btns { display: flex; gap: 4px; justify-content: center; }
+  .btns.small button { padding: 2px 4px; font-size: 10px; }
+  .square { width: 8px; height: 8px; background: #000; }
+  .clicks { font-size: 11px; color: #555; margin-top: 6px; min-height: 13px; }
+  .wrong { font-size: 12px; color: #c00; font-weight: bold; min-height: 15px; }
+</style>
+</head>
+<body>
+
+<div id="start">
+  <h1>PHILOSOPHY CLICKER</h1>
+  <p>You are a philosopher. Solve the problems.</p>
+  <button id="slowBtn">Slow &mdash; the real game</button>
+  <button id="fastBtn">Fast &mdash; 10&times; cheaper, for testing</button>
+  <small>fast mode divides every price and problem length by 10</small>
+</div>
+
+<div id="top">
+  <span id="money">Money: 0</span>
+  <span id="rps">Revenue/sec: 0</span>
+  <span id="population"></span>
+  <span id="mode"></span>
+</div>
+
+<div id="main">
+  <div class="side" id="left">
+    <div class="lab" id="autoLabel"></div>
+    <button id="autoBtn" disabled>Buy AutoClicker</button>
+    <div class="lab" id="repeatLabel"></div>
+    <button id="repeatBtn" disabled>Upgrade Repeat</button>
+  </div>
+
+  <div id="grid"></div>
+
+  <div class="side" id="right">
+    <div class="lab hidden" id="engineLabel"></div>
+    <button class="hidden" id="engineBtn" disabled>Buy Philosophy Engine</button>
+    <div class="lab hidden" id="duplicateLabel"></div>
+    <button class="hidden" id="duplicateBtn" disabled>Buy Duplicate Processes</button>
+  </div>
+</div>
+
+<script>
+// ---------- mode ----------
+// COST_SCALE multiplies every price; REPEAT_SCALE multiplies how many clicks each problem needs.
+let COST_SCALE = 1;
+let REPEAT_SCALE = 1;
+
+// ---------- state ----------
+let m = 0;
+const speed = 100; // tick speed in ms
+const reward = 1;
+const penalty = 0.5;
+let gameOver = false;
+
+let auto = 0;
+const autoCPTs = [2, 5, 10, 16, 25, 40, 180, 500, 2500, 10000, 40000];
+let autoCosts = [50, 200, 500, 1000, 2000, 6000, 15000, 50000, 400000, 1000000, 2000000];
+let autoLevel = 0;
+
+let engineStage = 0;
+let engineCosts = [null, 30000, 100000, 1000000, 50000000, 1000000000];
+let engineSpeed = 1;
+const ENGINE_ACCS = [null, 0.70, 0.80, 0.90, 1.00, 1.00];
+const ENGINE_RPS_BUMPS = [null, 1.0, 1.4, 1.4, 1.4, 1.5];
+
+let repeatUpgradeLevel = 0;
+let repeatUpgradeCost = 500;
+let repeatMultiplier = 1;
+let repeatRpsMultiplier = 1.0;
+
+let duplicateProcessesLevel = 0;
+let duplicateProcessesCost = 20000000;
+const MAX_DUPLICATOR_LEVEL = 5;
+
+const manualClickTimes = [];
+let lastManualClick = 0;
+
+const problems = [
+  ["A runaway trolley heads toward 5 workers; flip switch?", "Flip", "Don't", "Flip"],
+  ["Sacrifice one surgeon to save five? flip switch?", "Flip", "Don't", "Don't"],
+  ["Push a large man to stop the trolley from killing 3? flip switch?", "Flip", "Don't", "Don't"],
+  ["Divert trolley to loop with 3 prisoners? flip switch?", "Flip", "Don't", "Flip"],
+  ["Save scientist instead of 3 people? flip switch?", "Flip", "Don't", "Flip"],
+];
+
+const processors = [];
+
+// ---------- elements ----------
+const $ = id => document.getElementById(id);
+const grid = $("grid");
+
+const fmt = n => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+const scaledCost = c => Math.max(1, Math.round(c * COST_SCALE));
+const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const randomChoice = arr => arr[Math.floor(Math.random() * arr.length)];
+
+// ---------- processors ----------
+function createProcessor() {
+  const el = document.createElement("div");
+  el.className = "proc";
+  const q = document.createElement("div"); q.className = "q";
+  const btns = document.createElement("div"); btns.className = "btns";
+  const clicks = document.createElement("div"); clicks.className = "clicks";
+  const wrong = document.createElement("div"); wrong.className = "wrong";
+  el.append(q, btns, clicks, wrong);
+  grid.appendChild(el);
+  return { el, q, btns, clicks, wrong, currentProb: null, repeatMax: 0, clicksPerProblem: 0, playerChoice: null, wrongTimer: null };
+}
+
+function updateClicksLabel(proc) {
+  // Counters disappear once there are 8 or more processors
+  proc.clicks.textContent = processors.length < 8
+    ? `Clicks: ${Math.floor(proc.clicksPerProblem)}/${proc.repeatMax}`
+    : "";
+}
+
+function showProblem(proc) {
+  proc.clicksPerProblem = 0;
+  proc.repeatMax = Math.max(1, Math.round(randInt(500, 1000) * repeatMultiplier * REPEAT_SCALE));
+  proc.currentProb = randomChoice(problems);
+  proc.playerChoice = null;
+  proc.q.textContent = proc.currentProb[0];
+
+  proc.btns.innerHTML = "";
+  const total = processors.length;
+  // < 8: normal buttons · 8-15: small buttons, no counters · 16+: tiny black squares
+  if (total >= 16) {
+    const sq = document.createElement("div");
+    sq.className = "square";
+    proc.btns.appendChild(sq);
+  } else {
+    proc.btns.classList.toggle("small", total >= 8);
+    for (const choice of [proc.currentProb[1], proc.currentProb[2]]) {
+      const b = document.createElement("button");
+      b.textContent = choice;
+      b.onclick = () => pickFromProc(proc, choice);
+      proc.btns.appendChild(b);
+    }
+  }
+  updateClicksLabel(proc);
+  proc.wrong.textContent = "";
+}
+
+function rebuildGrid() {
+  const total = processors.length;
+  if (total === 0) return;
+  const cols = Math.min(8, total);
+  let scale = 1;
+  if (total >= 32) scale = 0.55;
+  else if (total >= 16) scale = 0.75;
+  else if (total >= 8) scale = 0.85;
+
+  grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, ${Math.round(300 * scale)}px))`;
+  const qsize = Math.max(8, Math.round(15 * scale));
+  for (const proc of processors) {
+    proc.q.style.fontSize = qsize + "px";
+    proc.el.style.padding = total >= 16 ? "4px" : "8px 6px";
+  }
+}
+
+function showWrongFlash(proc) {
+  if (proc.wrong.textContent !== "") return;
+  proc.wrong.textContent = "WRONG";
+  clearTimeout(proc.wrongTimer);
+  proc.wrongTimer = setTimeout(() => { proc.wrong.textContent = ""; }, 1200);
+}
+
+function engineMultiplier() {
+  let mult = 1.0;
+  for (let s = 1; s <= engineStage; s++) mult *= ENGINE_RPS_BUMPS[s];
+  return mult * repeatRpsMultiplier;
+}
+
+// ---------- upgrades ----------
+function updateUpgradeLabels() {
+  $("autoLabel").textContent = autoLevel < autoCPTs.length
+    ? `AutoClickers: ${auto}\nPrice: ${fmt(autoCosts[autoLevel])}`
+    : `AutoClickers: ${auto}\nMax Level`;
+  $("repeatLabel").textContent = repeatUpgradeLevel < 3
+    ? `Increase Problem Repetition\nPrice: ${fmt(repeatUpgradeCost)}`
+    : "Increase Problem Repetition\nMaxed";
+  $("engineLabel").textContent = engineStage < 5
+    ? `Philosophy Engine Level: ${engineStage}\nNext Price: ${fmt(engineCosts[engineStage + 1])}`
+    : "Philosophy Engine Level: MAXED";
+  $("duplicateLabel").textContent = duplicateProcessesLevel < MAX_DUPLICATOR_LEVEL
+    ? `Duplicate Processes\nPrice: ${fmt(duplicateProcessesCost)}`
+    : "Duplicate Processes\nMaxed";
+}
+
+function show(id) { $(id).classList.remove("hidden"); }
+
+function updateUpgradesState() {
+  $("autoBtn").disabled = !(autoLevel < autoCPTs.length && m >= autoCosts[autoLevel]);
+  $("repeatBtn").disabled = !(repeatUpgradeLevel < 3 && m >= repeatUpgradeCost);
+
+  // Engine appears once you can afford the first stage, then stays
+  if ($("engineLabel").classList.contains("hidden") && m >= engineCosts[1]) {
+    show("engineLabel"); show("engineBtn");
+  }
+  $("engineBtn").disabled = !(engineStage < 5 && m >= engineCosts[engineStage + 1]);
+
+  // Duplicator unlocks at engine stage 3
+  if (engineStage >= 3) {
+    show("duplicateLabel"); show("duplicateBtn");
+    if (duplicateProcessesLevel >= MAX_DUPLICATOR_LEVEL) {
+      $("duplicateBtn").disabled = true;
+      $("duplicateBtn").textContent = "Duplicate Processes (MAXED)";
+    } else {
+      $("duplicateBtn").disabled = m < duplicateProcessesCost;
+    }
+  }
+  updateUpgradeLabels();
+}
+
+function updateMoney() { $("money").textContent = `Money: ${fmt(m)}`; }
+
+function buyAuto() {
+  if (autoLevel < autoCPTs.length && m >= autoCosts[autoLevel]) {
+    m -= autoCosts[autoLevel];
+    auto += 1;
+    autoLevel += 1;
+    updateMoney();
+  }
+  updateUpgradesState();
+}
+
+function buyRepeat() {
+  if (repeatUpgradeLevel < 3 && m >= repeatUpgradeCost) {
+    m -= repeatUpgradeCost;
+    repeatUpgradeLevel += 1;
+    repeatMultiplier *= 2;
+    repeatRpsMultiplier *= 1.2;
+    repeatUpgradeCost *= 10;
+    updateMoney();
+  }
+  updateUpgradesState();
+}
+
+function buyEngine() {
+  if (engineStage >= 5) return;
+  const cost = engineCosts[engineStage + 1];
+  if (m < cost) return;
+  m -= cost;
+  engineStage += 1;
+  engineSpeed += 1;
+  updateMoney();
+  updateUpgradesState();
+}
+
+function buyDuplicate() {
+  if (duplicateProcessesLevel >= MAX_DUPLICATOR_LEVEL || engineStage < 3 || m < duplicateProcessesCost) return;
+  m -= duplicateProcessesCost;
+  duplicateProcessesLevel += 1;
+  duplicateProcessesCost = Math.round(duplicateProcessesCost * 2);
+  const needed = 2 ** duplicateProcessesLevel;
+  while (processors.length < needed) {
+    processors.push(createProcessor());
+  }
+  // Re-show every problem so all processors switch to the new stage's look
+  for (const proc of processors) showProblem(proc);
+  rebuildGrid();
+  updateMoney();
+  updateUpgradesState();
+}
+
+// ---------- manual click ----------
+function pickFromProc(proc, choice) {
+  const now = performance.now() / 1000;
+  if (now - lastManualClick < 1 / 9) return;
+  lastManualClick = now;
+  proc.playerChoice = choice;
+  proc.clicksPerProblem += 1;
+  manualClickTimes.push(now);
+  if (choice === proc.currentProb[3]) {
+    m += reward * engineMultiplier();
+  } else {
+    m -= penalty;
+    showWrongFlash(proc);
+  }
+  updateClicksLabel(proc);
+  updateMoney();
+  if (proc.clicksPerProblem >= proc.repeatMax) showProblem(proc);
+  updateUpgradesState();
+}
+
+// ---------- tick ----------
+function tick() {
+  const ticksPerSec = 1000 / speed;
+  const cptPower = autoLevel > 0 ? autoCPTs[autoLevel - 1] / 10 : 0;
+  let autoMoney = 0, engineMoney = 0;
+
+  for (const proc of processors) {
+    let effectiveChoice = proc.playerChoice;
+    // The engine chooses when the player hasn't
+    if (engineStage > 0 && effectiveChoice === null) {
+      const correct = proc.currentProb[3];
+      effectiveChoice = Math.random() < ENGINE_ACCS[engineStage]
+        ? correct
+        : (correct === "Don't" ? "Flip" : "Don't");
+    }
+    // Autoclickers repeat the effective choice
+    if (auto > 0 && effectiveChoice) {
+      const clicks = cptPower * auto;
+      proc.clicksPerProblem += clicks;
+      if (effectiveChoice === proc.currentProb[3]) {
+        const gain = clicks * reward * engineMultiplier();
+        m += gain; autoMoney += gain;
+      } else {
+        const loss = clicks * penalty;
+        m -= loss; autoMoney -= loss;
+        showWrongFlash(proc);
+      }
+    }
+    // Engine's own loops
+    if (engineStage > 0) {
+      const loops = engineStage * engineSpeed;
+      const acc = ENGINE_ACCS[engineStage];
+      for (let i = 0; i < loops; i++) {
+        proc.clicksPerProblem += 1;
+        if (Math.random() < acc) {
+          const gain = reward * engineMultiplier();
+          m += gain; engineMoney += gain;
+        } else {
+          m -= penalty; engineMoney -= penalty;
+          showWrongFlash(proc);
+        }
+      }
+    }
+    if (proc.clicksPerProblem >= proc.repeatMax) showProblem(proc);
+  }
+
+  for (const proc of processors) updateClicksLabel(proc);
+  updateMoney();
+
+  const now = performance.now() / 1000;
+  while (manualClickTimes.length && now - manualClickTimes[0] > 1.0) manualClickTimes.shift();
+  const manualPerSec = manualClickTimes.length * reward * engineMultiplier();
+  const totalRps = manualPerSec + autoMoney * ticksPerSec + engineMoney * ticksPerSec;
+  $("rps").textContent = `Revenue/sec: ${fmt(totalRps)}`;
+
+  updateUpgradesState();
+  if (!gameOver) setTimeout(tick, speed);
+}
+
+// ---------- start ----------
+function startGame(fast) {
+  if (fast) { COST_SCALE = 0.1; REPEAT_SCALE = 0.1; }
+  autoCosts = autoCosts.map(scaledCost);
+  engineCosts = engineCosts.map(c => c === null ? null : scaledCost(c));
+  repeatUpgradeCost = scaledCost(repeatUpgradeCost);
+  duplicateProcessesCost = scaledCost(duplicateProcessesCost);
+  $("mode").textContent = fast ? "[fast mode]" : "";
+
+  $("autoBtn").onclick = buyAuto;
+  $("repeatBtn").onclick = buyRepeat;
+  $("engineBtn").onclick = buyEngine;
+  $("duplicateBtn").onclick = buyDuplicate;
+
+  $("start").classList.add("hidden");
+  processors.push(createProcessor());
+  showProblem(processors[0]);
+  rebuildGrid();
+  updateUpgradesState();
+  tick();
+}
+
+$("slowBtn").onclick = () => startGame(false);
+$("fastBtn").onclick = () => startGame(true);
+</script>
+</body>
+</html>
